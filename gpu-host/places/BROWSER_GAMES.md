@@ -16,6 +16,20 @@ person's paid machine is theirs: we do not preinstall nor charge for any of thes
   pointer problem of first-person games in a browser); for the player the browser build usually feels better. The place copy is for
   people whose device cannot run it.
 
+## Engine choice (checked 2026-11-28)
+
+- **Our server** is Debian's `ioquake3-server` 1.36+u20250316 (upstream ioquake3 at commit 526edd3). The best browser client is **the
+  same engine**: ioquake3's own Emscripten build (in the upstream tree since 2024), built from that same commit, so client and server
+  speak the same protocol for certain.
+- Other options looked at: projects that already pair ioquake3 WebAssembly with a WebSocket-to-UDP gateway (q3js; quake3-web, which
+  also ships OpenArena content and bots) are useful as reference for the gateway; the Quake3e lineage has no browser multiplayer client
+  (Trinity Engine's web build only plays recorded demos); QuakeJS is too old to build.
+- **Preset:** every copy comes ready for our server. The browser page starts the engine with `+connect` to the gateway; inside a place,
+  a desktop shortcut "Quake III (our server)" starts `ioquake3 +connect` to the server's LAN address.
+- **Not public by default:** the browser reaches the gateway through the door, under the door's session check (the same `auth_request`
+  that guards the desktops), so only people with an account (free) can play; no UDP port is opened to the internet. A public server (open
+  UDP port and a gateway without login) costs nothing in money but is an exposure decision for the operator, later.
+
 ## What may be served (checked 2026-11-28; not legal advice)
 
 | Game data | May we serve it from a web page? | Basis |
