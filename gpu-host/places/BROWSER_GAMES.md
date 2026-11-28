@@ -28,6 +28,12 @@ person's paid machine is theirs: we do not preinstall nor charge for any of thes
   (Trinity Engine's web build only plays recorded demos); QuakeJS is too old to build.
 - **Preset:** every copy comes ready for our server. The browser page starts the engine with `+connect` to the gateway; inside a place,
   a desktop shortcut "Quake III (our server)" starts `ioquake3 +connect` to the server's LAN address.
+- **Why never a public raw-UDP server (operator agreed 2026-11-28).** Quake III's connectionless queries (`getstatus`, `getinfo`) answer
+  a spoofed 41-byte UDP request with up to ~2.6 KB, a ~64x amplification (CISA alert TA14-017A), and Quake III servers were used for
+  reflection DDoS. ioquake3 rate-limits those replies since 2010 (leaky buckets: 10 a second per address plus a global limit; our
+  Debian build from 2025 has it), but a rate limit only slows abuse spread over many servers, and the server would sit on the home's
+  line, shared with everything else. The browser path cannot be spoofed at all (a WebSocket is TCP, with a handshake and TLS, behind the
+  door's session), so if a public game ever comes, it is that path, never an open UDP port.
 - **Not public by default:** the browser reaches the gateway through the door, under the door's session check (the same `auth_request`
   that guards the desktops), so only people with an account (free) can play; no UDP port is opened to the internet. A public server (open
   UDP port and a gateway without login) costs nothing in money but is an exposure decision for the operator, later.

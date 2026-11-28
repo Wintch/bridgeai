@@ -234,12 +234,16 @@ P2.last_game_id = {"alpha": "steam:286690"}; P2._game_names = {("alpha", "steam:
 row = lambda ts, cpu, sm, w, temp, places: {"ts": ts, "place": "alpha", "cpu_pct": cpu, "mem_mb": 4100, "net_tx_kbps": 2300, "place_vram_mb": 1100,
                                              "gpu_sm_pct": sm, "gpu_enc_pct": 7, "gpu_power_w": w, "gpu_temp_c": temp, "places_running": places}
 P2.write_metrics([row(t0 - 60, 5, 1, 20, 40, 1), row(t0, 150, 40, 100, 55, 1), row(t0 + 60, 190, 60, 120, 60, 2), row(t0 + 3700, 190, 80, 140, 61, 1)])
+P2.settings = lambda n: {"show_energy": True}
 code, d = P2.diag_report("alpha")
 check("diag: the session's rows only (from opened_at), the game by name, the last sample, averages and peaks",
       (code, d["session"]["samples"], d["game"], d["now"]["gpu_power_w"], d["session"]["gpu_power_w"], d["session"]["gpu_sm_pct"]["peak"]),
       (200, 3, {"id": "steam:286690", "name": "Metro 2033 Redux"}, 140.0, {"avg": 120.0, "peak": 140.0}, 80.0))
 check("diag: GPU Wh over the session skips a gap longer than 10 min (the host slept), and says whether the card was shared",
       (d["session"]["gpu_wh"], d["session"]["shared"], d["fps"]), (round(100 * 60 / 3600, 1), True, None))
+P2.settings = lambda n: {}
+check("diag: without show_energy the session's Wh are not shown (measured silently; testers do not see the spend)", "gpu_wh" in P2.diag_report("alpha")[1]["session"], False)
+del P2.settings
 os.environ["PLACE_METRICS_FILE"] = mfile
 
 # --- a logout inside the desktop is a switch-off; the live state goes to the LAN bus

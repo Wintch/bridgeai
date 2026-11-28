@@ -1034,7 +1034,8 @@ print("set" if ok else "failed")
                 w, dt = num(a, "gpu_power_w"), float(b["ts"]) - float(a["ts"])
                 if w is not None and 0 < dt <= 600:          # a gap (the host slept) is not counted
                     wh += w * dt / 3600
-            sess["gpu_wh"] = round(wh, 1)
+            if self.settings(name).get("show_energy"):     # the energy spent is measured always (silently: the logs, the per-game
+                sess["gpu_wh"] = round(wh, 1)                  # profiles) but shown only where the operator turned it on (testers: not)
             sess["shared"] = max((num(r, "places_running") or 1) for r in mine) > 1
             out["session"] = sess
         gid = (getattr(self, "last_game_id", {}) or {}).get(name) or (mine[-1].get("game") if mine else "") or ""
