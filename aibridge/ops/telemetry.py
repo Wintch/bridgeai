@@ -83,7 +83,9 @@ rows = db.execute("""
   select session_id, role, timestamp, finish_reason, display_kind,
          case when role='assistant' and tool_calls is null and (content is null or length(trim(content))=0) then 1 else 0 end,
          case when role='tool' and (content like '{"error"%' or content like 'Error%' or content like '%"success": false%')
-              then 1 else 0 end
+              then 1 else 0 end,
+         case when role='user' and (display_kind in ('steer','internal_notification') or content like '[CONTEXT COMPACTION%'
+              or content like '[OUT-OF-BAND USER MESSAGE%') then 1 else 0 end
   from messages
   where session_id in (select distinct session_id from messages where role='user' and timestamp > ?)
   order by session_id, timestamp, id""", (since,)).fetchall()
@@ -104,6 +106,11 @@ for r in rows:
     if r[0] != cur:
         if turn: emit(cur, turn, any(m[1] == "assistant" and m[3] == "stop" for m in turn[1:]))
         cur, turn = r[0], []
+    if r[1] == "user" and r[7] and turn and not any(m[1] == "assistant" and m[3] == "stop" for m in turn[1:]):
+        # Not a new turn: a context compaction summary, a message the person sent mid-turn (steer) or a background
+        # notification continues the running turn (each was counted as a failed turn: 9 of 12 on one stack in a day).
+        turn.append(r)
+        continue
     if r[1] == "user":
         # A burst (several messages before any answer) is ONE turn: Hermes answers them together. Measured
         # 35 of hernik's 58 "unanswered" Telegram messages were followed within 30 s by another one.

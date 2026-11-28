@@ -274,5 +274,27 @@ for i, k in enumerate(["person", "subagent", "subagent", "cron"]):
 text, stats = tel.stack_lines(c, "a", base)
 check("daily: subagent turns are not the person's turns", stats["turns"] == 2 and stats["failed"] == 0, stats)
 check("daily: a subagents line", "subagents: 3 delegations, 4 tasks" in text, text)
+# a compaction summary and a mid-turn (steer) message continue the running turn; a notification after the answer is a new turn
+st2 = os.path.join(TMP, "state2.db")
+s = sqlite3.connect(st2)
+s.executescript("create table sessions(id text primary key, source text not null, billing_provider text, model text, model_config text);"
+                "create table messages(id integer primary key autoincrement, session_id text, role text, timestamp real, finish_reason text,"
+                " display_kind text, tool_calls text, content text);")
+s.execute("insert into sessions values('P2', 'telegram', 'p', 'm', null)")
+T2 = now - 3000
+for dt, role, fin, dk, tc, content in [
+        (0, "user", None, None, None, SECRET), (2, "assistant", "tool_calls", None, "[1]", ""), (3, "tool", None, None, None, "ok"),
+        (60, "user", None, None, None, "[CONTEXT COMPACTION — REFERENCE ONLY] " + SECRET), (62, "assistant", "tool_calls", None, "[1]", ""),
+        (70, "user", None, "steer", None, "[OUT-OF-BAND USER MESSAGE — a direct message] " + SECRET),
+        (80, "assistant", "stop", None, None, "done"),
+        (200, "user", None, "internal_notification", None, SECRET), (205, "assistant", "stop", None, None, "noted")]:
+    s.execute("insert into messages(session_id, role, timestamp, finish_reason, display_kind, tool_calls, content) values(?,?,?,?,?,?,?)",
+              ("P2", role, T2 + dt, fin, dk, tc, content))
+s.commit(); s.close()
+r3 = subprocess.run([sys.executable, "-I", "-", str(now - 7200), st2, "900", "/nonexistent"], input=tel.TURNS_SCRIPT,
+                    capture_output=True, text=True, timeout=60)
+t3 = tel.parse_stack_read(r3.stdout)["turns"] if r3.returncode == 0 else []
+check("continuations: compaction + steer stay in one answered turn, the later notification is its own",
+      [(round(t["seconds"] or -1), t["failed"], t["tools"]) for t in t3] == [(80, 0, 1), (5, 0, 0)], [r3.stderr[-300:], t3])
 print("\n".join(fails) or "telemetry_subagents_selftest: all ok")
 sys.exit(1 if fails else 0)
