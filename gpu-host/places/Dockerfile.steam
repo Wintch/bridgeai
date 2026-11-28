@@ -3,6 +3,10 @@
 #   build-steam.sh [BASE_IMAGE] [TAG]     builds bridgeai-place-steam:latest
 # Steam is Debian's own steam-installer package (non-free), so apt checks it; the client itself downloads its updates into the person's folder at first start.
 # The 32-bit NVIDIA libraries are NOT in the image: the NVIDIA runtime mounts the host's own once the image has the i386 architecture.
+# The Quake III demo's data comes from a small data-only image (bridgeai-quake3-demo-data:N, made once from game-data-packager's package:
+# see PLACES.md "Quake III demo data"), not downloaded at every build: the vendor's mirrors come and go, and the data never changes.
+ARG Q3DATA=bridgeai-quake3-demo-data:1
+FROM ${Q3DATA} AS q3data
 ARG BASE=bridgeai-place-sunshine:latest
 FROM ${BASE}
 # The base image makes ~/.local/bin/bwrap a link to proot at every start and points BWRAP there unless BWRAP is already set. Steam's runtime takes BWRAP:
@@ -29,16 +33,15 @@ RUN set -eux; apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y 
     printf '#!/bin/sh\nexec /opt/Heroic/heroic --no-sandbox "$@"\n' > /usr/local/bin/heroic; chmod 755 /usr/local/bin/heroic; \
     sed -i 's#^Exec=/opt/Heroic/heroic#Exec=/usr/local/bin/heroic#' /usr/share/applications/heroic.desktop; grep -q '^Exec=/usr/local/bin/heroic' /usr/share/applications/heroic.desktop; \
     apt-get clean; rm -rf /var/lib/apt/lists/*
-# The Quake III Arena demo on ioquake3 (contrib): game-data-packager fetches id Software's free demo from the vendor's mirror and builds the data package,
-# then is removed again. Two places can play it against each other over the LAN (PLACE_GAME_UDP, place.py --udp 27960; PLACES.md).
-# The heavy part first (packages, the Quake demo data download): it stays cached when only a script below changes, so a rebuild
-# for a script writes kilobytes, not gigabytes, to the host's disk.
+# The Quake III Arena demo on ioquake3 (contrib), its data copied from the data-only image (see the top). Two places can play it against each other
+# over the LAN (PLACE_GAME_UDP, place.py --udp 27960; PLACES.md). Before people's paid machines it becomes their own choice (BROWSER_GAMES.md).
 RUN set -eux; apt-get update; \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ioquake3 game-data-packager arc-theme papirus-icon-theme xfce4-genmon-plugin; \
-    mkdir -p /tmp/q3; /usr/games/game-data-packager quake3 --demo -d /tmp/q3 --no-search --download; \
-    dpkg -i /tmp/q3/quake3-demo-data_*_all.deb; rm -rf /tmp/q3; \
-    DEBIAN_FRONTEND=noninteractive apt-get purge -y --auto-remove game-data-packager; \
-    test -d /usr/lib/quake3/demo/demoq3; apt-get clean; rm -rf /var/lib/apt/lists/*
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ioquake3 arc-theme papirus-icon-theme xfce4-genmon-plugin; \
+    apt-get clean; rm -rf /var/lib/apt/lists/*
+COPY --from=q3data /usr/share/games/quake3-demo-data /usr/share/games/quake3-demo-data
+COPY --from=q3data /usr/lib/quake3 /usr/lib/quake3
+COPY --from=q3data /usr/share/doc/quake3-demo-data /usr/share/doc/quake3-demo-data
+RUN test -e /usr/lib/quake3/demo/demoq3/pak0.pk3
 # FPS for the person's diagnostic (gateway escritorio diag): MangoHud as a Vulkan layer on every Vulkan game (Windows games under Proton/DXVK
 # are Vulkan), no overlay on screen, logging from the first second to ~/.bridgeai/mangohud (the gate reads the newest log and keeps 30 days).
 # Native OpenGL games (Quake) are not covered. Its own layer after the heavy one, so the Quake download above stays cached.

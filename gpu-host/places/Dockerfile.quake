@@ -1,6 +1,10 @@
 # The Quake III Arena demo on the plain place image, without Steam or the games profile (ioquake3 needs no user namespaces): a light desktop for
 # LAN games between places. Same launcher and menu entries as the games image (quake3-demo, quake3-demo.desktop, quake3-demo-window.desktop).
 #   docker build -f Dockerfile.quake -t bridgeai-place-quake:latest .
+# The Quake III demo's data comes from a small data-only image (bridgeai-quake3-demo-data:N, made once from game-data-packager's package:
+# see PLACES.md "Quake III demo data"), not downloaded at every build: the vendor's mirrors come and go, and the data never changes.
+ARG Q3DATA=bridgeai-quake3-demo-data:1
+FROM ${Q3DATA} AS q3data
 ARG BASE=bridgeai-place:latest
 FROM ${BASE}
 USER root
@@ -8,13 +12,14 @@ USER root
 # for a script writes kilobytes, not gigabytes, to the host's disk.
 RUN set -eux; \
     printf 'Types: deb\nURIs: http://deb.debian.org/debian\nSuites: trixie trixie-updates\nComponents: main contrib\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n' > /etc/apt/sources.list.d/bridgeai-contrib.sources; \
-    apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ioquake3 game-data-packager arc-theme papirus-icon-theme xfce4-genmon-plugin; \
-    mkdir -p /tmp/q3; /usr/games/game-data-packager quake3 --demo -d /tmp/q3 --no-search --download; \
-    dpkg -i /tmp/q3/quake3-demo-data_*_all.deb; rm -rf /tmp/q3; \
-    DEBIAN_FRONTEND=noninteractive apt-get purge -y --auto-remove game-data-packager; \
-    test -e /usr/lib/quake3/demo/demoq3/pak0.pk3; apt-get clean; rm -rf /var/lib/apt/lists/*; \
+    apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ioquake3 arc-theme papirus-icon-theme xfce4-genmon-plugin; \
+    apt-get clean; rm -rf /var/lib/apt/lists/*; \
     # no Steam in this image: the base image's `steam` shim (it would install Steam through proot on first use) and any Steam menu entry go
     rm -f /usr/local/bin/steam /usr/share/applications/steam*.desktop
+COPY --from=q3data /usr/share/games/quake3-demo-data /usr/share/games/quake3-demo-data
+COPY --from=q3data /usr/lib/quake3 /usr/lib/quake3
+COPY --from=q3data /usr/share/doc/quake3-demo-data /usr/share/doc/quake3-demo-data
+RUN test -e /usr/lib/quake3/demo/demoq3/pak0.pk3
 COPY quake3-demo /usr/local/bin/quake3-demo
 COPY kill-game /usr/local/bin/kill-game
 COPY kill-game.desktop /usr/share/applications/kill-game.desktop

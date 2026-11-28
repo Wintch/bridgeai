@@ -333,3 +333,12 @@ never wakes the host, does nothing when no game was installed or updated since i
 First measure: 196 GB of game files in 5 places, about 10.6 GB shared, the read takes about 3 minutes. Disk only: two places playing the same
 game still read it each (memory sharing needs hardlinks in the `library` subvolume, WEEKLY_COOP.md). A person can tell from the extent map
 that another place has identical game blocks (which games or versions others have): accepted for game files.
+
+## Quake III demo data
+
+The games and Quake images copy the demo's data from a small data-only image, `bridgeai-quake3-demo-data:N`, instead of downloading it at every
+build: game-data-packager's mirrors come and go (on 2026-11-28 one name no longer resolved and another served a file that failed the check),
+and the data never changes. The image holds `/usr/share/games/quake3-demo-data`, `/usr/lib/quake3` and the package's documentation (with
+id's licence). To make it again, build the data package once with `game-data-packager quake3 --demo` in a throwaway Debian container (when
+a mirror works), install it there, and copy those three paths into a `FROM scratch` image; or copy them from an image that already has
+them (how `:1` was made, from the games image of 2026-11-26). The demo's distribution terms: `BROWSER_GAMES.md`.
