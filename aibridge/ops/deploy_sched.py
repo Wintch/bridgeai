@@ -12,10 +12,11 @@ DEPLOY_POLL_S (5) seconds from a read of the host (load, /proc/meminfo, `docker 
     est_brain_mb in stacks.json, DEPLOY_DEFAULT_NEED_MB (1000) when telemetry has no row;
   * the awake on-demand brains (people's awake stacks + recreates in flight, always-on brains excluded as the waker counts them) stay
     within the waker's max_awake (both read from the host's ops/wake/stacks.json, the waker's own config);
-  * at least DEPLOY_LAUNCH_GAP_S (10) since the previous start, so the load average and memory show the previous boot first;
+  * at least DEPLOY_LAUNCH_GAP_S (3) since the previous boot started, so the host read shows it first (measured: with load at 0.25/CPU
+    of 16 and 9 GB spare, the old 10 s gap, not the host, set the pace: 11 stacks took ~170 s, one boot alone 33 s, 3-4 at once 44 s);
   * fewer than DEPLOY_MAX_INFLIGHT in flight, when set (1 = the old one-by-one order; default 0 = no cap besides the above).
 With nothing in flight one is started anyway (never fewer than one: the deploy always moves on, as the serial loop did). A stack whose brain
-is already running costs nothing (the script refuses it at once): it is started without the checks. A failed recreate never stops the others.
+is already running costs nothing (the script refuses it at once): it is started at once, without the checks or the gap, and takes no gap. A failed recreate never stops the others.
 
 After a recreate passes, the waker puts the stack back to sleep (waker.py sleep_after_recreate: nobody used it, the script released its
 lock); this script only watches for that, up to DEPLOY_STOP_WAIT_S (150), to time it. An always-on stack stays up by design.
@@ -32,7 +33,7 @@ import deploy_log  # noqa: E402
 
 ENV = os.environ.get
 CFG_DEFAULTS = {"load_per_cpu": float(ENV("DEPLOY_LOAD_PER_CPU", "0.75")), "reserve_mb": 1500, "max_awake": 6,
-                "default_need_mb": int(ENV("DEPLOY_DEFAULT_NEED_MB", "1000")), "launch_gap_s": float(ENV("DEPLOY_LAUNCH_GAP_S", "10")),
+                "default_need_mb": int(ENV("DEPLOY_DEFAULT_NEED_MB", "1000")), "launch_gap_s": float(ENV("DEPLOY_LAUNCH_GAP_S", "3")),
                 "poll_s": float(ENV("DEPLOY_POLL_S", "5")), "stop_wait_s": float(ENV("DEPLOY_STOP_WAIT_S", "150")),
                 "max_inflight": int(ENV("DEPLOY_MAX_INFLIGHT", "0"))}
 
@@ -198,28 +199,28 @@ def run(stacks, host, cfg, results_path, phases_path=None, logdir=None, out=prin
             f["used"] = st.get("used", {}).get(brain_of(s, info.get(s)), 0)
         awake = {n for n in set(info) | set(stacks) if not info.get(n, {}).get("always") and brain_of(n, info.get(n)) in running}
         state = {"load1": st["load1"], "ncpu": conf.get("ncpu", 1), "mem_avail_mb": st["mem_avail_mb"], "awake": awake}
-        if queue and now - last_launch >= cfg["launch_gap_s"]:
-            pick, why = None, None
+        # An awake stack is started at once, without the gap: its recreate only refuses it (exit 3) and takes no CPU or memory.
+        pick = next((s for s in queue if brain_of(s, info.get(s)) in running), None)
+        why, boots = "awake: its recreate refuses it at once", False
+        if not pick and queue and now - last_launch >= cfg["launch_gap_s"]:
             for s in queue:
-                if brain_of(s, info.get(s)) in running:
-                    pick, why = s, "awake: its recreate refuses it at once"
-                    break
                 ok, why = admit(s, needs[s], bool(info.get(s, {}).get("always")), state, inflight, cfg)
                 if ok:
-                    pick = s
+                    pick, boots = s, True
                     break
-            if pick:
-                queue.remove(pick)
-                path = os.path.join(logdir, f"recreate-{pick}.log")
-                proc, log = host.recreate(pick, path)
-                inflight[pick] = {"proc": proc, "log": log, "path": path, "t0": clock(), "need": needs[pick], "used": 0,
-                                  "always": bool(info.get(pick, {}).get("always"))}
-                last_launch, last_why = clock(), None
-                out(f"-> {pick} started ({why}); in flight: {', '.join(inflight)}")
-                continue
-            if why != last_why:
+            if not pick and why != last_why:
                 out(f"waiting ({len(queue)} left, {len(inflight)} in flight): {why}")
                 last_why = why
+        if pick:
+            queue.remove(pick)
+            path = os.path.join(logdir, f"recreate-{pick}.log")
+            proc, log = host.recreate(pick, path)
+            inflight[pick] = {"proc": proc, "log": log, "path": path, "t0": clock(), "need": needs[pick], "used": 0,
+                              "always": bool(info.get(pick, {}).get("always"))}
+            if boots:
+                last_launch, last_why = clock(), None
+            out(f"-> {pick} started ({why}); in flight: {', '.join(inflight)}")
+            continue
         if queue or inflight or watching:
             sleep(cfg["poll_s"])
     wall = clock() - t_all

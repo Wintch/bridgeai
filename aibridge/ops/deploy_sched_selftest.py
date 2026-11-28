@@ -151,6 +151,13 @@ chk({p["stack"]: p["result"] for p in ph if p["name"] == "recreate"} == {"a": "o
 chk(not any(p["name"] == "stop" and p["stack"] in ("b", "c") for p in ph), "run: no stop is awaited for a failed or awake stack")
 rc, got, *_ = go({"a": (30, 0, 500), "c": (0, 3, 500)}, mem=12000)
 chk(rc == 3, "run: awake but no failure -> exit 3")
+# awake stacks take no launch gap: three awake ones listed first do not delay the sleeping ones behind them
+plan = {"w1": (0, 3, 500), "w2": (0, 3, 500), "w3": (0, 3, 500), "s0": (60, 0, 800), "s1": (60, 0, 800)}
+rc, got, ph, lines, h, clk = go(plan, people=("w1", "w2", "w3"), mem=12000)
+t0 = min(h.started.values())
+chk(rc == 3 and got == {"w1": "3", "w2": "3", "w3": "3", "s0": "0", "s1": "0"}, "run: awake ones refused (3), the rest recreated", (rc, got))
+chk(h.started["s0"] - t0 < 10 and h.started["s1"] - h.started["s0"] >= 10,
+    "run: an awake stack takes no launch gap; two boots are still spaced by it", {s: h.started[s] - t0 for s in h.started})
 # an older waker that keeps the stack up: the deploy does not wait forever, it says so
 rc, got, ph, lines, h, clk = go({"a": (30, 0, 500)}, stop_after=10_000)
 chk(rc == 0 and [p["result"] for p in ph if p["name"] == "stop"] == ["left-up"] and any("still up" in l for l in lines),
