@@ -3,6 +3,17 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 21fe0f3 — 2026-11-28
+
+Image 10e7174aecd4. Replaces 6078c20. Some stacks were awake and update when idle.
+
+- Waker: the update note helpers are optional on a stack object (the offline tests' shims copy only some methods) (`21fe0f3`)
+- Update restarts are told once: the waker names what the restart cut (background programs, the browser, live subagents; names only) in the stack's workdir right before it stops a brain for an update; the person's next message carries a note for the model: one 🔧 line in their language, the conversation and files are as before, what was cut and whether to resume it. Nothing cut: only people with detailed notices get the line. The note stays on that one message (prompt cache) for a few hours (`866440e`)
+- Waker: a closed browser means the person left: the stack sleeps once no chat tab has been open for 60 s (the Open WebUI container's established connections on its port; a reload or a page still loading is not a departure), never while a turn or a job runs, so a pending update applies right away (`aebcde3`)
+- Docs: night work and a background agent per person (front/back, shared space, keys per person, phases, the person's alarm, maintenance has the host to itself); delirium tests design; the heavy-tools review loop (`5e55021`)
+- Stack diagnostics: context per model call, provider cache, compactions, tokens, cost, per-turn calls/tools, waits and tool ranking per stack (`04cad13`)
+- Docs: the pipeline at a glance (Mermaid: stages, machines by role, the protocol and auth of each hop) and a message's path in time (Telegram, wake VM, waker, plugin, router, model or GPU gate, data over NFS); changelog: b27a226, 4037340 and 6078c20 deployed (`bc18120`)
+
 ## 6078c20 — 2026-11-27
 
 Image ae836090f19b. Replaces 4037340. Some stacks were awake and update when idle.
