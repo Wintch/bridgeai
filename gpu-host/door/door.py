@@ -359,41 +359,42 @@ class Door:
 
 PAGE = """<!doctype html><html lang="{lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">{head}<title>{title}</title><style>
-:root{{--bg:#1c2233;--surface:#262d42;--line:#3a4360;--text:#ece8de;--muted:#9aa4b8;--amber:#f0b44c;--stop:#e06a5c;
+:root{{--bg:#fff;--surface:#fff;--tile:#f4f6f9;--line:#dfe3ea;--text:#1c2233;--muted:#5d6578;--amber:#f0b44c;--link:#8a5800;--stop:#b3402f;--ink:#1c2233;
 font:16px/1.5 Ubuntu,Cantarell,"Segoe UI Variable","Segoe UI",system-ui,sans-serif;color:var(--text);background:var(--bg)}}
 body{{margin:0;min-height:100vh;display:flex;padding:1rem 0;box-sizing:border-box}}
-main{{background:var(--surface);padding:2rem;border-radius:14px;width:min(100% - 2rem,420px);box-sizing:border-box;margin:auto}}
+main{{position:relative;overflow:hidden;background:var(--surface);border:1px solid var(--line);padding:2rem 2rem 7.5rem;border-radius:18px;width:min(100% - 2rem,420px);box-sizing:border-box;margin:auto}}
+main>*{{position:relative;z-index:1}}main>.peaks{{position:absolute;left:0;right:0;bottom:0;width:100%;height:6.5rem;z-index:0;pointer-events:none}}
 main:has(.panel),main:has(.guide){{width:min(100% - 2rem,920px)}}
 h1{{font-size:1.875rem;line-height:1.2;margin:0 0 .25rem;font-weight:500}}h2{{font-size:1.3rem;font-weight:500;margin:1.6rem 0 .5rem}}
-p{{margin:.4rem 0}}.st{{color:var(--muted);margin-bottom:1.2rem}}.err{{color:var(--stop)}}a{{color:var(--amber)}}
+p{{margin:.4rem 0}}.st{{color:var(--muted);margin-bottom:1.2rem}}.err{{color:var(--stop)}}a{{color:var(--link)}}
 ul{{margin:0;padding-left:1.2em}}li{{margin:.35em 0;line-height:1.5}}nav{{margin:.8em 0}}nav a{{margin-right:1em}}
-code{{background:var(--bg);padding:0 .3em;border-radius:4px}}
-kbd{{background:var(--bg);border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:0 .35em;font-size:.85em;white-space:nowrap}}
-input,button{{font:inherit;padding:.65em .9em;border-radius:9px;border:1px solid var(--line);background:var(--bg);color:var(--text);width:100%;box-sizing:border-box;margin:.3em 0}}
-button{{background:var(--amber);color:var(--bg);border:0;cursor:pointer;font-weight:500}}button.sec{{background:#343c55;color:var(--text)}}button.stop{{background:transparent;color:var(--stop);border:1px solid var(--stop)}}
+code{{background:var(--tile);padding:0 .3em;border-radius:4px}}
+kbd{{background:var(--tile);border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:0 .35em;font-size:.85em;white-space:nowrap}}
+input,button{{font:inherit;min-height:2.75rem;padding:0 1rem;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--text);width:100%;box-sizing:border-box;margin:0}}
+button{{background:var(--amber);color:var(--ink);border:1px solid var(--amber);cursor:pointer;font-weight:500;line-height:1.2}}button.sec{{background:var(--tile);color:var(--text);border:1px solid var(--line)}}button.stop{{background:transparent;color:var(--stop);border:1px solid var(--stop)}}
 button:disabled{{background:transparent;color:var(--muted);border:1px dashed var(--line);cursor:default}}
-:focus-visible{{outline:2px solid var(--amber);outline-offset:2px}}
-.row{{display:flex;gap:.6rem;flex-wrap:wrap}}.row form{{flex:1 1 10rem}}.foot{{margin-top:1.6rem;display:flex;gap:1rem;align-items:center;color:var(--muted)}}.foot form button{{width:auto;padding:.4em .9em}}
+:focus-visible{{outline:2px solid var(--ink);outline-offset:2px}}
+.row{{display:flex;gap:.6rem;flex-wrap:wrap;margin:.4rem 0}}.row form{{flex:1 1 10rem}}.foot{{margin-top:1.6rem;display:flex;gap:1rem;align-items:center;color:var(--muted)}}.foot form button{{width:auto}}
 .screen{{position:relative;aspect-ratio:16/9;background:#000;border-radius:10px;border:10px solid #0d1019;border-bottom-width:16px;overflow:hidden}}
 .screen img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .18s}}
 .picks{{display:grid;grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr));gap:.7rem;margin:1rem 0 .6rem;border:0;padding:0}}
 .picks input{{position:absolute;opacity:0;width:1px;height:1px}}
-.pick{{display:block;cursor:pointer;border:2px solid transparent;border-radius:10px;padding:.35rem;background:var(--bg)}}
+.pick{{display:block;cursor:pointer;border:2px solid transparent;border-radius:10px;padding:.35rem;background:var(--tile)}}
 .pick img{{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:6px}}.pick b{{display:block;font-weight:500;margin:.35rem .2rem 0}}
 .pick small{{display:block;color:var(--muted);margin:0 .2rem .15rem}}.pick.soon{{border:2px dashed var(--line)}}
-.picks input:focus-visible+.pick{{outline:2px solid var(--amber);outline-offset:2px}}.picks input:checked+.pick{{border:2px solid var(--amber)}}
+.picks input:focus-visible+.pick{{outline:2px solid var(--ink);outline-offset:2px}}.picks input:checked+.pick{{border:2px solid var(--amber)}}
 .say,.go{{display:none}}
 .pdb{{display:flex;gap:.5rem;flex-wrap:wrap}}.pdb input{{flex:1 1 14rem;width:auto}}.pdb button{{flex:0 0 auto;width:auto}}
 .load,.sec{{margin-top:1.5rem;padding-top:.1rem;border-top:1px solid var(--line)}}.load h2,.sec h2,.picks legend{{font-size:1.15rem;font-weight:500;color:var(--text);margin:.9rem 0 .45rem;padding:0}}
 .load dl{{display:grid;grid-template-columns:repeat(auto-fit,minmax(12rem,1fr));gap:.4rem 1.2rem;margin:.6rem 0}}.load dt{{color:var(--muted);font-size:.9rem}}
-.load dd{{margin:0;font-variant-numeric:tabular-nums}}.bar{{display:block;height:6px;border-radius:3px;background:var(--bg);margin:.25rem 0;position:relative;overflow:hidden}}
+.load dd{{margin:0;font-variant-numeric:tabular-nums}}.bar{{display:block;height:6px;border-radius:3px;background:var(--tile);margin:.25rem 0;position:relative;overflow:hidden}}
 .bar::after{{content:"";position:absolute;inset:0 auto 0 0;width:var(--v);background:var(--muted)}}.bar.hot::after{{background:var(--stop)}}
 .games ul{{list-style:none;padding:0}}.games li{{margin:.6em 0}}.games small{{color:var(--muted);font-variant-numeric:tabular-nums}}
 .games .who{{display:block;margin-left:1.05em;overflow-wrap:anywhere}}.games .who.none{{color:var(--muted)}}
 .dot{{display:inline-block;width:.6em;height:.6em;border-radius:50%;background:var(--muted);margin-right:.45em}}.dot.on{{background:var(--amber)}}.dot.down{{background:var(--stop)}}
 @media (prefers-reduced-motion:reduce){{.screen img{{transition:none}}}}
 {extra}</style></head>
-<body><main>{body}</main></body></html>"""
+<body><main>{body}{peaks}</main></body></html>"""
 
 T = {
     "es": {"title": "Escritorio", "user": "Usuario", "pass": "Clave", "login": "Entrar", "bad": "Usuario o clave incorrectos.", "slow": "Demasiados intentos. Esperá unos minutos.",
@@ -853,19 +854,15 @@ PEAKS = ("<svg class=peaks viewBox='0 0 600 150' aria-hidden=true preserveAspect
          "<path d='M0 150V126l90-36 60 28 80-46 70 48 80-32 70 36 70-28 80 32v24z' fill='#fff' stroke='#1c2233' stroke-width='1.5' stroke-linejoin='round'/>"
          "<path d='M216 80l14-8 14 9M366 98l14-10 15 10M506 104l14-8 12 8' fill='none' stroke='#1c2233' stroke-width='1.2' stroke-linecap='round'/></svg>")
 CARD_CSS = (
-    "body{background:#fff;color:#1c2233}main{background:transparent;padding:1rem}main:has(.gift){width:min(100% - 2rem,760px)}"
-    ".gift .links a,.gift .links button{color:#4a5368}.gift .links a.go-back{color:#1c2233}"
+    "main:has(.gift){background:transparent;border:0;padding:1rem;width:min(100% - 2rem,760px)}"
     ".card{position:relative;overflow:hidden;margin-top:1rem;border:1px solid #dfe3ea;border-radius:18px;aspect-ratio:1.586;box-sizing:border-box;"
     "display:grid;grid-template-columns:auto 1fr;gap:1.6rem;align-items:start;padding:1.6rem;background:#fff}"
     ".qr{display:block;width:clamp(9.5rem,28vw,13rem);height:auto;position:relative;z-index:1}"
     ".card h1{font-size:1.9rem;margin:.2rem 0 .5rem;color:#1c2233}.card p{color:#4a5368;margin:.35rem 0;max-width:32ch;position:relative;z-index:1}"
     ".card .small{font-size:.9rem;color:#5d6578}.peaks{position:absolute;left:0;right:0;bottom:0;width:100%;height:40%;z-index:0}"
-    ".card form{position:relative;z-index:1}.card button{width:auto;padding:.7em 1.4em;color:#1c2233}"
+    ".card form{position:relative;z-index:1}.card button{width:auto}"
     "@media (max-width:640px){.card{aspect-ratio:auto;grid-template-columns:1fr;justify-items:center;text-align:center;padding-bottom:8rem}}"
-    # the entry pages (login; the welcome and maintenance pages are static copies) are the same white card, narrow, the form above the peaks
-    "main:has(.entry){width:min(100% - 2rem,440px)}.card.entry{aspect-ratio:auto;grid-template-columns:1fr;padding:1.8rem 1.8rem 7.5rem;text-align:left;justify-items:stretch}"
-    ".entry .peaks{height:6.5rem}.entry h1.mark{font-size:1.7rem}.entry label{color:#4a5368}.entry input{background:#fff;color:#1c2233;border:1px solid #c9cfda}"
-    ".entry button{width:100%;margin-top:1.1rem}.entry .err{color:#b3402f}.gift :focus-visible{outline-color:#1c2233}")
+    ".card .peaks{position:absolute;height:40%}")
 
 
 def qr_svg(text):
@@ -893,21 +890,24 @@ def guide_ways(person):
 # filled amber = on, amber ring = switching on, grey ring = off or resting, red ring = something failed. Plain CSS, nothing from outside.
 SHARED_CSS = (
     "header.bar{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:.4rem 1.5rem}header.bar h1{margin:0}"
-    ".links{display:flex;flex-wrap:wrap;gap:.3rem 1.2em;align-items:baseline}.links a,.links button{color:var(--muted);text-decoration:none}"
-    ".links a:hover,.links button:hover{color:var(--text);text-decoration:underline}.links a.go-back{color:var(--amber)}"
-    ".links form{display:inline}.links button{all:unset;cursor:pointer}.links button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}"
-    ".links button.out{color:var(--text);border:1px solid var(--line);border-radius:999px;padding:.1em .85em}.links button.out:hover{border-color:var(--text);text-decoration:none}"
+    ".links{display:flex;flex-wrap:wrap;gap:.4rem .7rem;align-items:center}.links a{color:var(--muted);text-decoration:none;font-size:.92rem}"
+    ".links a:hover{color:var(--text);text-decoration:underline}.links form{display:inline}"
+    ".links .pill,.links button,.btnlike{all:unset;box-sizing:border-box;cursor:pointer;display:inline-flex;align-items:center;min-height:2.75rem;"
+    "padding:0 1rem;border:1px solid var(--line);border-radius:10px;background:var(--tile);color:var(--text);font-weight:500;line-height:1.2}"
+    ".links .pill:hover,.links button:hover,.btnlike:hover{border-color:var(--text);text-decoration:none}"
+    ".links .pill:focus-visible,.links button:focus-visible{outline:2px solid var(--ink);outline-offset:2px}"
+    ".btnlike:focus-visible{outline:2px solid var(--ink);outline-offset:2px}"
     ".state{display:flex;align-items:center;gap:.65rem;font-size:1.15rem;color:var(--text);margin:.9rem 0 1rem}"
     ".state::before,.mark::before{content:'';flex:0 0 1.05rem;height:1.05rem;box-sizing:border-box;border-radius:50%;border:2px solid var(--muted)}"
     ".s-open::before,.mark::before{background:var(--amber);border-color:var(--amber)}.s-starting::before{border-color:var(--amber);animation:node 1.6s ease-in-out infinite}"
     ".s-error::before{border-color:var(--stop)}@keyframes node{50%{box-shadow:0 0 0 .4rem color-mix(in srgb,var(--amber) 25%,transparent)}}"
     ".mark{display:flex;align-items:center;gap:.65rem}"
-    "kbd{background:var(--bg);border:1px solid var(--line);border-bottom:3px solid #0d1019;border-radius:5px;padding:.05em .45em;font-weight:500}"
-    ".totop{position:fixed;right:1rem;bottom:1rem;z-index:5;min-width:2.9rem;height:2.9rem;padding:0 .9rem;box-sizing:border-box;border-radius:999px;"
-    "display:grid;place-items:center;background:var(--surface);border:2px solid var(--amber);color:var(--amber);text-decoration:none;font-weight:500}"
-    ".totop:hover{background:var(--amber);color:var(--bg)}html{scroll-behavior:smooth}"
+    "kbd{background:var(--tile);border:1px solid var(--line);border-bottom:3px solid #c9cfda;border-radius:5px;padding:.05em .45em;font-weight:500}"
+    ".totop{position:fixed;right:1rem;bottom:1rem;z-index:5;min-width:2.75rem;height:2.75rem;padding:0 1rem;box-sizing:border-box;border-radius:10px;"
+    "display:grid;place-items:center;background:var(--surface);border:2px solid var(--amber);color:var(--ink);text-decoration:none;font-weight:500}"
+    ".totop:hover{background:var(--amber);color:var(--ink)}html{scroll-behavior:smooth}"
     "label{display:block;color:var(--muted);font-size:.92rem;margin-top:.7rem}label input{margin-top:.25rem}form>button{margin-top:1rem}"
-    ".row form>button,.pdb>button{margin-top:.3em}"
+    ".row form>button,.pdb>button{margin-top:0}"
     ".show{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:1.6rem;align-items:start;margin-top:.4rem}"
     ".show .go{margin:0}.show .say{color:var(--muted);margin:.5rem 0 0}.show .picks{margin-top:1rem}"
     ".facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(7.5rem,1fr));gap:.3rem 1rem;margin:.9rem 0 0}.facts dt{color:var(--muted);font-size:.82rem}"
@@ -924,18 +924,18 @@ DESIGN_MARK = '<meta name="design-guide" content="guia-sitios@a787438 frontend-d
 # One bold thing: the flow is a power-up sequence on a line (first stop filled amber = switch on, last ringed red = switch off), vertical on a
 # phone. Everything else stays quiet: hairline-ruled sections in two columns, lines under 70 characters, keys drawn as keycaps.
 GUIDE_CSS = (
-    ".tabs{display:inline-flex;margin:1.1rem 0 0;border:1px solid var(--line);border-radius:999px;padding:3px}"
-    ".tabs a{padding:.3em 1.1em;border-radius:999px;color:var(--muted);text-decoration:none;margin:0}.tabs a.on{background:var(--bg);color:var(--text)}"
+    ".tabs{display:inline-flex;margin:1.1rem 0 0;border:1px solid var(--line);border-radius:10px;padding:3px}"
+    ".tabs a{display:inline-flex;align-items:center;min-height:calc(2.75rem - 8px);padding:0 1rem;border-radius:7px;color:var(--muted);text-decoration:none;margin:0}.tabs a.on{background:var(--tile);color:var(--text)}"
     ".flow{list-style:none;counter-reset:f;display:grid;grid-auto-flow:column;grid-auto-columns:1fr;margin:1.9rem 0 .4rem;padding:0}"
     ".flow li{counter-increment:f;position:relative;margin:0;padding:2.2rem 1rem 0 0;line-height:1.35}"
     ".flow li::before{content:counter(f);position:absolute;z-index:1;top:0;left:0;width:1.6rem;height:1.6rem;box-sizing:border-box;border-radius:50%;"
-    "display:grid;place-items:center;font-size:.8rem;font-weight:600;background:var(--surface);border:2px solid var(--amber);color:var(--amber)}"
+    "display:grid;place-items:center;font-size:.8rem;font-weight:600;background:var(--surface);border:2px solid var(--amber);color:var(--ink)}"
     ".flow li::after{content:'';position:absolute;top:calc(.8rem - 1px);left:1.6rem;right:0;height:2px;background:color-mix(in srgb,var(--amber) 40%,var(--line))}"
-    ".flow li:first-child::before{background:var(--amber);color:var(--bg)}.flow li:last-child::before{border-color:var(--stop);color:var(--stop)}"
+    ".flow li:first-child::before{background:var(--amber);color:var(--ink)}.flow li:last-child::before{border-color:var(--stop);color:var(--stop)}"
     ".flow li:last-child::after{display:none}"
     ".guide section{border-top:1px solid var(--line);margin-top:1.5rem;padding-top:.1rem}.guide section h2{font-size:1.15rem;margin:.9rem 0 .45rem}"
     ".guide li{max-width:68ch}.cols{columns:2 22rem;column-gap:2.5rem}.cols section{break-inside:avoid}"
-    ".guide .proton{margin-top:1.4rem;padding:.2rem 1rem 1rem;background:var(--bg);border-radius:10px}.guide .proton h2{margin-top:.8rem}"
+    ".guide .proton{margin-top:1.4rem;padding:.2rem 1rem 1rem;background:var(--tile);border-radius:10px}.guide .proton h2{margin-top:.8rem}"
     "@media (max-width:640px){.flow{grid-auto-flow:row}.flow li{padding:0 0 1.2rem 2.5rem}"
     ".flow li::after{top:1.6rem;bottom:0;left:calc(.8rem - 1px);right:auto;width:2px;height:auto}}")
 
@@ -992,8 +992,9 @@ def make_handler(door):
             self.end_headers()
             self.wfile.write(body)
 
-        def page(self, lang, body, code=200, headers=(), head="", css=""):
-            self.send(code, PAGE.format(lang=lang, title=T[lang]["title"], body=body, extra=SHOW_CSS + SHARED_CSS + css, head=head or DESIGN_MARK).encode(), headers=headers)
+        def page(self, lang, body, code=200, headers=(), head="", css="", peaks=True):
+            self.send(code, PAGE.format(lang=lang, title=T[lang]["title"], body=body, extra=SHOW_CSS + SHARED_CSS + css, head=head or DESIGN_MARK,
+                                        peaks=PEAKS if peaks else "").encode(), headers=headers)
 
         def redirect(self, to, headers=()):
             self.send(303, b"", headers=(("Location", to),) + tuple(headers))
@@ -1005,11 +1006,11 @@ def make_handler(door):
 
         def login_page(self, lang, msg=""):
             t = T[lang]
-            self.page(lang, f"<div class=gift><div class='card entry'><div><h1 class=mark>{t['title']}</h1>"
+            self.page(lang, f"<h1 class=mark>{t['title']}</h1>"
                             f"{f'<p class=err role=alert>{msg}</p>' if msg else ''}<form method=post action=/_door/login>"
                             f"<label>{t['user']}<input name=u autocomplete=username required maxlength=12 autocapitalize=none spellcheck=false></label>"
                             f"<label>{t['pass']}<input name=p type=password autocomplete=current-password required maxlength=200></label>"
-                            f"<button>{t['login']}</button></form></div>{PEAKS}</div></div>", 200 if not msg else 401, css=CARD_CSS)
+                            f"<button>{t['login']}</button></form>", 200 if not msg else 401)
 
         def showroom(self, who, lang, csrf, act, facts=""):
             """The desktops as a picker: a big screen with the chosen one, small previews to pick from, one button for the chosen one.
@@ -1041,9 +1042,9 @@ def make_handler(door):
             c = html.escape(s["csrf"])
             btn = lambda act, label, cls="": f"<form method=post action=/_door/{act}><input type=hidden name=c value='{c}'><button class='{cls}'>{label}</button></form>"
             node = {"open": "s-open", "starting": "s-starting", "error": "s-error"}.get(st["state"], "s-off")
-            card = f"<a href=/_door/card>{CARD_T[lang]['phone']}</a>" if door.conf.get("one_time") else ""
+            card = f"<a class=pill href=/_door/card>{CARD_T[lang]['phone']}</a>" if door.conf.get("one_time") else ""
             langs = "".join(f"<a href='/_door/?l={l}' lang={l}>{n}</a>" for l, n in LANG_NAMES if l != lang)
-            body = (f"<div class=panel id=top><header class=bar><h1>{html.escape(who)}</h1><nav class=links>{card}<a href='/_door/guide?l={lang}'>{t['guide']}</a>"
+            body = (f"<div class=panel id=top><header class=bar><h1>{html.escape(who)}</h1><nav class=links>{card}<a class=pill href='/_door/guide?l={lang}'>{t['guide']}</a>"
                     f"{langs}" + btn("logout", t["logout"], "out") + "</nav></header>"
                     f"<p class='st state {node}' role=status>{t.get(st['state'], t['error'])}</p>")
             if st["state"] == "open":
@@ -1068,7 +1069,7 @@ def make_handler(door):
                 body += games_html(lang, door.games.status(games))
             body += load_html(lang, st.get("host"), st["state"])
             long_page = st["state"] in ("open", "off", "asleep", "error")          # the showroom makes it more than a screen on a phone
-            body += f"<div class=foot><a href='/_door/guide?l={lang}'>{t['guide']}</a>" + btn("logout", t["logout"], "sec") + "</div>"   # Salir at the end too
+            body += f"<div class=foot><a class=btnlike href='/_door/guide?l={lang}'>{t['guide']}</a>" + btn("logout", t["logout"], "sec") + "</div>"   # Salir at the end too
             body += (f"<a class=totop href=#top>{TOP_T[lang]}</a>" if long_page else "") + "</div>"
             self.page(lang, body)
 
@@ -1079,17 +1080,17 @@ def make_handler(door):
             who = s["person"]
             lang, c = self.lang(who), CARD_T[self.lang(who)]
             url = f"{self.base_url()}/_door/t/{door.tickets.mint(who, door.now())}"
-            back = f"<a class=go-back href=/_door/>← {T[lang]['title']}</a>"
+            back = f"<a class=pill href=/_door/>← {T[lang]['title']}</a>"
             self.page(lang, f"<div class=gift><header class=bar><span></span><nav class=links>{back}</nav></header><div class=card>{qr_svg(url)}"
                             f"<div><h1>{c['title']}</h1><p>{c['scan']}</p><p class=small>{c['once']}</p></div>{PEAKS}</div></div>",
-                      headers=(("Cache-Control", "no-store"),), css=CARD_CSS)
+                      headers=(("Cache-Control", "no-store"),), css=CARD_CSS, peaks=False)
 
         def ticket_page(self, tok, lang, ok, code=200, headers=()):
             c = CARD_T[lang]
             inner = (f"<h1>{c['title']}</h1><p>{c['here']}</p><form method=post action=/_door/t/{tok}><button>{c['go']}</button></form>" if ok
                      else f"<h1>{c['title']}</h1><p>{c['gone']}</p>")
             self.page(lang, f"<div class=gift><div class=card style='grid-template-columns:1fr'><div>{inner}</div>{PEAKS}</div></div>", code,
-                      headers=(("Cache-Control", "no-store"), ("Referrer-Policy", "no-referrer")) + tuple(headers), css=CARD_CSS)
+                      headers=(("Cache-Control", "no-store"), ("Referrer-Policy", "no-referrer")) + tuple(headers), css=CARD_CSS, peaks=False)
 
         def guide_page(self, s, want, way):
             who = s["person"]
@@ -1099,7 +1100,7 @@ def make_handler(door):
             tabs = "".join(f"<a class='{'on' if w == way else ''}' href='/_door/guide?s={w}&l={lang}'"
                            f"{' aria-current=page' if w == way else ''}>{GUIDE[lang]['tabs'][w]}</a>" for w in ways)
             langs = "".join(f"<a href='/_door/guide?s={way}&l={l}' lang={l}>{n}</a>" for l, n in LANG_NAMES if l != lang)
-            back = f"<a class=go-back href='/_door/?l={lang}'>← {T[lang]['title']}</a>"
+            back = f"<a class=pill href='/_door/?l={lang}'>← {T[lang]['title']}</a>"
             out = (f"<form method=post action=/_door/logout><input type=hidden name=c value='{html.escape(s['csrf'])}'>"
                    f"<button class='out'>{T[lang]['logout']}</button></form>")
             self.page(lang, f"<div class=guide id=top><header class=bar><h1>{T[lang]['guide']}: {html.escape(who)}</h1><nav class=links>{back}{langs}{out}</nav></header>"

@@ -179,6 +179,9 @@ check("a games place's guide has a ProtonDB search that opens ProtonDB's own sea
       "action='https://www.protondb.com/search'" in door.guide_html("es", {"games": True}, "web") and "target=_blank" in door.guide_html("es", {"games": True}, "web")
       and "protondb" not in door.guide_html("es", {"games": "quake"}, "web"))
 check("the guide needs a session", req("GET", "/_door/guide")[0] == 303)
+_css = door.PAGE + door.SHARED_CSS + door.GUIDE_CSS + door.CARD_CSS
+check("one control system: every control is 2.75rem tall (44 px, the guide's touch target) and nothing uses pill corners",
+      set(re.findall(r"min-height:([0-9.]+rem)", _css)) == {"2.75rem"} and "999px" not in _css, sorted(set(re.findall(r"min-height:[^;}]+", _css))))
 # the gift card and its one-time way in
 check("without one_time, no card, and an old link gets the 'no longer valid' page (410), not a bare 404", req("GET", "/_door/card", cookie=ck)[0] == 404 and req("GET", "/_door/t/" + "a" * 22)[0] == 410)
 D.conf["one_time"] = True
