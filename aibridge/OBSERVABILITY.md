@@ -366,7 +366,8 @@ waiting for a deploy (69 minutes on one stack, 13 on another; → background wit
 that saved and, with `--windows`, when each was awake, to compare with the planned wakes (the Docker host's alarm = its nearest important
 timer or bot cron, capped at 12 h; the GPU host wakes only on demand). Sources: the Docker host's telemetry samples (a gap over 12 min =
 asleep) and the GPU host's suspend log. The watts are estimates until measured: measure them with budgetai's meter method
-(`tools/energy` in budgetai: a night with the hosts asleep against one awake and idle) and set `ENERGY_HOSTS` and `KWH_PRICE` in the
+(`tools/energy` in budgetai, "Measuring one machine at a time, and finding a leak": the meter's constant and a phone give the watts
+in a minute, an hour per machine and state gives the exact figure, and everything off must leave the meter still) and set `ENERGY_HOSTS` and `KWH_PRICE` in the
 untracked `BUILD_DIR/after_batch.env`. First reading (2026-11-28): the Docker host asleep 48 % of the time since sleeping began, the GPU
 host 36 %: about 39 kWh a month at the default watts.
 
