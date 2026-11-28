@@ -6,8 +6,8 @@
 # The Quake III demo's data comes from a small data-only image (bridgeai-quake3-demo-data:N, made once from game-data-packager's package:
 # see PLACES.md "Quake III demo data"), not downloaded at every build: the vendor's mirrors come and go, and the data never changes.
 ARG Q3DATA=bridgeai-quake3-demo-data:1
-FROM ${Q3DATA} AS q3data
 ARG BASE=bridgeai-place-sunshine:latest
+FROM ${Q3DATA} AS q3data
 FROM ${BASE}
 # The base image makes ~/.local/bin/bwrap a link to proot at every start and points BWRAP there unless BWRAP is already set. Steam's runtime takes BWRAP:
 # under proot (ptrace on every system call) Steam and every Proton game ran several times slower with the card nearly idle. A games place has real user

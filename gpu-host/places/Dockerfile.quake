@@ -4,8 +4,8 @@
 # The Quake III demo's data comes from a small data-only image (bridgeai-quake3-demo-data:N, made once from game-data-packager's package:
 # see PLACES.md "Quake III demo data"), not downloaded at every build: the vendor's mirrors come and go, and the data never changes.
 ARG Q3DATA=bridgeai-quake3-demo-data:1
-FROM ${Q3DATA} AS q3data
 ARG BASE=bridgeai-place:latest
+FROM ${Q3DATA} AS q3data
 FROM ${BASE}
 USER root
 # The heavy part first (packages, the Quake demo data download): it stays cached when only a script below changes, so a rebuild
