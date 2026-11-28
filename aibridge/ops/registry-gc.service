@@ -1,0 +1,9 @@
+[Unit]
+Description=bridgeai: keep the private image registry small (registry_gc.py: the last KEEP builds stay)
+# A user unit on the build machine (the operator's PC), next to bridgeai-registry: systemctl --user link this file and the .timer,
+# then systemctl --user enable --now registry-gc.timer. It never runs during a build (buildkit.lock).
+
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=/usr/bin/python3 -I %h/Documents/bridgeai/aibridge/ops/registry_gc.py --apply
