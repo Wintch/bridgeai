@@ -130,7 +130,10 @@ def steam_cover(appid):
 def sunshine_apps():
     """Keeps Sunshine's app list (what Moonlight shows for this host) = the place's own apps + one entry per installed game, each sized to the client
     first (place-sunshine-res) and started detached. Only apps whose command carries a game link are ours; the rest are kept as they are. When the
-    list changes, Sunshine is told to reload it by saving its first app unchanged through its admin API (localhost only), so a stream is never cut."""
+    list changes the file is rewritten and Sunshine reads it at its next start (place-sunshine restarts it with each desktop session).
+    No live reload through Sunshine's admin API any more: the "save the first app at index 0" trick made this Sunshine version ADD a copy of
+    that app and restart the running stream, every minute (51 "Desktop" entries and a ~3 s cut each minute in Moonlight, 2026-11-28).
+    Duplicates (same app twice) are dropped."""
     path = os.path.join(SUN_DIR, "apps.json")
     port = os.environ.get("SUNSHINE_PORT", "")
     if not port.isdigit() or not os.path.isfile(path):
@@ -140,7 +143,11 @@ def sunshine_apps():
     except (OSError, ValueError):
         return 0
     own = lambda a: any(m in " ".join(a.get("detached") or []) + a.get("cmd", "") for m in OURS)
-    keep = [a for a in cur.get("apps", []) if not own(a)]
+    keep, seen_keep = [], set()
+    for a in cur.get("apps", []):
+        k = json.dumps(a, sort_keys=True)
+        if not own(a) and k not in seen_keep:
+            seen_keep.add(k); keep.append(a)
     games = [{"name": g["name"], "image-path": g["cover"] or "desktop.png", "detached": [g["cmd"]],
               "prep-cmd": [{"do": "/usr/local/bin/place-sunshine-res", "undo": ""}]} for g in sorted(GAMES, key=lambda g: g["name"].lower())]
     new = dict(cur, apps=sorted(keep + games, key=lambda a: a.get("name", "")))     # Sunshine keeps its list sorted by name when it saves
@@ -150,16 +157,6 @@ def sunshine_apps():
     with open(path + ".tmp", "w") as fh:
         json.dump(new, fh, indent=2)
     os.replace(path + ".tmp", path)
-    pw = os.environ.get("SUNSHINE_ADMIN_PASS", "")
-    if pw and keep:
-        import base64, ssl, urllib.request
-        body = json.dumps(dict(keep[0], index=0)).encode()
-        req = urllib.request.Request(f"https://127.0.0.1:{int(port) + 1}/api/apps", data=body, method="POST", headers={
-            "Content-Type": "application/json", "Authorization": "Basic " + base64.b64encode(f"admin:{pw}".encode()).decode()})
-        try:
-            urllib.request.urlopen(req, timeout=10, context=ssl._create_unverified_context()).read()
-        except Exception as e:
-            print(f"place-desktop-links: Sunshine did not reload its apps: {e}", file=sys.stderr)
     return 1
 
 

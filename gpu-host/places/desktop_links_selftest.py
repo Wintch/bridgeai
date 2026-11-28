@@ -74,5 +74,19 @@ _d = json.load(open(os.path.join(sun, "apps.json")))
 _d["apps"].reverse()
 json.dump(_d, open(os.path.join(sun, "apps.json"), "w"))
 check("Sunshine reordering the list is not a change", pdl.sunshine_apps() == 0)
+# 51 identical "Desktop" entries (2026-11-28): collapsed to one, and Sunshine's admin API is never called (a call added a copy and cut the stream)
+_d = json.load(open(os.path.join(sun, "apps.json")))
+_desk = [a for a in _d["apps"] if a["name"] == "Desktop"][0]
+_d["apps"] += [dict(_desk) for _ in range(50)]
+json.dump(_d, open(os.path.join(sun, "apps.json"), "w"))
+os.environ["SUNSHINE_ADMIN_PASS"] = "x"
+_calls = []
+import urllib.request as _ur
+_orig = _ur.urlopen
+_ur.urlopen = lambda *a, **k: _calls.append(a) or (_ for _ in ()).throw(OSError("no network in tests"))
+check("duplicated apps collapse to one", pdl.sunshine_apps() == 1 and sum(a["name"] == "Desktop" for a in json.load(open(os.path.join(sun, "apps.json")))["apps"]) == 1)
+check("Sunshine's admin API is never called (no live reload)", _calls == [], str(_calls))
+check("after the cleanup the list is stable", pdl.sunshine_apps() == 0)
+_ur.urlopen = _orig
 print("desktop_links_selftest: " + ("all ok" if not fails else f"{fails} failed"))
 sys.exit(1 if fails else 0)
