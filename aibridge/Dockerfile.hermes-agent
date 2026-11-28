@@ -400,6 +400,7 @@ COPY SKILL_audio_transcription.md /root/.hermes/skills/devops/audio-transcriptio
 COPY SKILL_audio_identify.md /root/.hermes/skills/devops/audio-identify/SKILL.md
 COPY SKILL_davinci_resolve.md /root/.hermes/skills/devops/davinci-resolve/SKILL.md
 COPY SKILL_effectcraft.md /root/.hermes/skills/devops/effectcraft/SKILL.md
+COPY SKILL_long_tasks.md /root/.hermes/skills/productivity/long-tasks/SKILL.md
 COPY SKILL_web_interface.md /root/.hermes/skills/devops/web-interface/SKILL.md
 COPY SKILL_job_notify.md /root/.hermes/skills/devops/job-notify/SKILL.md
 COPY SKILL_hub.md /root/.hermes/skills/devops/hub/SKILL.md
