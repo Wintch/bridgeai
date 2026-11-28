@@ -82,6 +82,7 @@ st.pop("mem"); st.pop("swap"); st.pop("steam"); _json.dump(st, open(sp, "w"))
 r = run("recreate", "herlim", e=dict(env, PLACE_MEM="4g"))
 last = [l for l in open(log).read().splitlines() if l.startswith("create ")][-1]
 check("without them: PLACE_MEM, no swap and Steam off, as before", "--memory 4g --memory-swap 4g" in last and "PLACE_STEAM=no" in last, last)
+check("a place without the GPU gets no NVIDIA cache settings", "__GL_SHADER_DISK_CACHE" not in last, last)
 r = run("steam", "herlim", "maybe")
 check("place.py steam refuses anything but auto|no", r.returncode == 2, r.stderr)
 r = run("steam", "herlim", "auto")
@@ -92,6 +93,7 @@ check("place.py mem refuses a bad size", run("mem", "herlim", "lots").returncode
 r = run("create", "herstr", "--gpu")
 c2 = open(log).read().splitlines()[-1]
 check("the next place takes the next pair of ports, and --gpu adds the NVIDIA runtime", "-p 10.9.8.7:3030:3000" in c2 and "--runtime nvidia" in c2, c2)
+check("a GPU place keeps a 16 GB NVIDIA shader cache that is never pruned", "__GL_SHADER_DISK_CACHE_SIZE=17179869184" in c2 and "__GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1" in c2, c2)
 for bad in ("Bad", "a", "x" * 25, "../x", "1abc", "a b"):
     check(f"a name like {bad!r} is refused", run("create", bad).returncode == 2)
 r = run("create", "other", e=dict(env, PLACE_BIND="8.8.8.8"))

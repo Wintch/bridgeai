@@ -228,6 +228,7 @@ def limits(env=None, settings=None):
     return ["--memory", mem, "--memory-swap", total, "--cpus", cpus, "--pids-limit", pids]
 
 
+NV_SHADER_CACHE_BYTES = 16 * 1024 ** 3     # the NVIDIA shader disk cache a GPU place may keep (it lives in the place's hostcache, outside its snapshots)
 STEAM_CHOICES = ("auto", "no")
 
 
@@ -1159,6 +1160,10 @@ def run_args(name, image, bind, ports, gpu=False, env=None, udp=None, sunshine=N
         args += ["--mount", f"type=bind,source={src},target={dst}"]
     if sunshine:
         args += ["--env-file", os.path.join(d, ".sunshine.env"), "-e", f"SUNSHINE_PORT={int(sunshine)}", "-e", f"SUNSHINE_NAME={container(name)}"]
+    if gpu:                                      # NVIDIA's shader disk cache: 1 GB by default and pruned even when Steam asks it not to (users' reports), and a
+        # game's prepared shaders alone can pass 4 GB (GTA IV, 2026-11-28): a pruned cache means preparing or compiling again. Set for the whole session,
+        # not per game (per-game launch options were reported not to work).
+        args += ["-e", f"__GL_SHADER_DISK_CACHE_SIZE={NV_SHADER_CACHE_BYTES}", "-e", "__GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1"]
     if gpu and games:                            # the games device: same driver, plus its 32-bit libraries and without the /proc file bubblewrap trips on
         args += ["--device", GAMES_CDI_DEVICE, "-e", "NVIDIA_VISIBLE_DEVICES=all", "-e", "NVIDIA_DRIVER_CAPABILITIES=all"]
     elif gpu:
