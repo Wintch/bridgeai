@@ -127,12 +127,15 @@ st=$(systemctl --user is-active aibridge-waker.service); [ "$st" = active ] && e
 tb=$(journalctl --user -u aibridge-waker.service --since -2h --no-pager -o cat 2>/dev/null | grep -c Traceback)
 [ "$tb" = 0 ] && echo "CHECK waker_tracebacks ok none in 2 h" || echo "CHECK waker_tracebacks fail $tb in 2 h"
 failed=$(systemctl --user --failed --plain --no-legend 2>/dev/null | awk '{print $1}' | tr '\n' ' ')
-[ -z "$failed" ] && echo "CHECK user_units ok none failed" || echo "CHECK user_units fail $failed"
+# a timer's run that failed and was not retried yet: say when it last ran (a run cut by a deploy is not the same as a broken unit)
+detail=""; for u in $failed; do detail="$detail $u($(systemctl --user show -p ActiveExitTimestamp --value "$u" 2>/dev/null | cut -c5-20))"; done
+[ -z "$failed" ] && echo "CHECK user_units ok none failed" || echo "CHECK user_units fail$detail"
 free=$(df -BG --output=avail / | tail -1 | tr -dc 0-9); [ "$free" -ge 25 ] && echo "CHECK disk ok ${free} GB free" || echo "CHECK disk fail ${free} GB free (< 25)"
 la=$(cut -d' ' -f1 /proc/loadavg); echo "CHECK load ok $la"
 [ -x ops/feature_status.py ] || [ -f ops/feature_status.py ] && python3 ops/feature_status.py list | sed 's/^/KNOWN /'
-if docker ps --format '{{.Names}}' | grep -qx guest-prueba; then
-  docker exec guest-prueba curl -sf -m3 http://localhost:8642/health >/dev/null && echo "CHECK guest ok answers /health" || echo "CHECK guest fail no /health"
+if docker ps --format '{{.Names}}' | grep -qx guest-prueba; then   # up to 60 s: a deploy may have just recreated it
+  g=fail; for i in $(seq 1 20); do docker exec guest-prueba curl -sf -m3 http://localhost:8642/health >/dev/null 2>&1 && { g=ok; break; }; sleep 3; done
+  [ "$g" = ok ] && echo "CHECK guest ok answers /health" || echo "CHECK guest fail no /health in 60 s"
 fi
 '''
 

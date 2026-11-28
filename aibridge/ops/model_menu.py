@@ -20,7 +20,7 @@ tried to look at an image and found no model that worked. Now:
 Hermes reads both keys on every /model, so no restart is needed. Keys are read on the host like ops/key_check.py and
 never printed. Stopped stacks are skipped; the on-wake hook updates them when they wake.
 """
-import argparse, base64, concurrent.futures, json, os, struct, subprocess, sys, time, urllib.error, urllib.request, zlib
+import argparse, base64, concurrent.futures, fcntl, json, os, struct, subprocess, sys, time, urllib.error, urllib.request, zlib
 
 import yaml
 
@@ -101,6 +101,24 @@ def stacks():
 def running(c):
     r = sh("docker", "inspect", "-f", "{{.State.Running}}", c)
     return r.stdout.strip() == "true"
+
+
+def recreating(name):
+    """True while ops/recreate_hermes.sh holds ops/wake/<name>.recreate.lock (a deploy or an update is replacing the container): writing the menu
+    into it then fails half-way (the container goes away under `hermes config set`) and only makes a false alert. The next run writes it."""
+    lock = os.path.join(os.path.dirname(os.path.abspath(STACKS)), f"{name}.recreate.lock")
+    if not os.path.exists(lock):
+        return False
+    try:
+        with open(lock, "a") as f:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(f, fcntl.LOCK_UN)
+                return False
+            except OSError:
+                return True
+    except OSError:
+        return False
 
 
 def keys(c):
@@ -244,6 +262,9 @@ def main():
             continue
         if not running(c):
             print(f"== {s['name']} ({c}): stopped, skipped")
+            continue
+        if recreating(s["name"]):
+            print(f"== {s['name']} ({c}): being recreated (deploy or update), skipped; the next run writes it")
             continue
         menu, codes = decide(c, state, a.fresh)
         new_rows = rows(menu)
