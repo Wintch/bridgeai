@@ -16,3 +16,6 @@ RUN --mount=type=bind,source=debs,target=/tmp/resolve-debs \
     apt-get clean; rm -rf /var/lib/apt/lists/*
 # Resolve keeps its media storage in the person's home, which is the mounted /config (their own folder)
 ENV RESOLVE_HOME=/opt/resolve
+
+# What this image needs from its host (../REQUIREMENTS.md; checked by ../host_caps.py). Last line on purpose: it changes no cached layer.
+LABEL org.bridgeai.requires='{"arch": "amd64", "cpu": "x86-64-v3", "gpu": "nvidia", "vram_gb": 6, "driver_min": "550", "ram_gb": 16}'

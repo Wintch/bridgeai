@@ -494,3 +494,6 @@ COPY content_guard.py /usr/local/bin/content-guard
 RUN chmod 755 /usr/local/bin/browse-page /usr/local/bin/buscar-empleos /usr/local/bin/content-guard
 RUN chmod +x /app/start_hermes.sh
 CMD ["/app/start_hermes.sh"]
+
+# What this image needs from its host (../REQUIREMENTS.md; checked by ../host_caps.py). Last line on purpose: it changes no cached layer.
+LABEL org.bridgeai.requires='{"arch": "amd64", "cpu": "x86-64-v2", "gpu": "none", "ram_gb": 2}'

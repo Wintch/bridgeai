@@ -38,11 +38,38 @@ Rules:
 - A credential the person never types (internal password, place token) can be rotated at any time without telling them (see DOOR.md,
   "rotating the place's internal password"). One they type or pair (door password, Moonlight pairing) is rotated with them.
 
+## 2b. Ports by layer: the port says which service it is
+
+Each service has its own block, and the machine's slot N (its uid is 3001 + N, given by `place.py`) picks the place in the block. A port, a
+router forward or a firewall counter then names the service and the machine by itself, and a vulnerability report for one program maps to the
+exact ports and machines that expose it.
+
+| Layer (service) | Software | Ports of machine N | Notes |
+|---|---|---|---|
+| web desktop | the browser stream of the desktop | TCP 3000+10N (http), 3001+10N (https) | the scheme already in use |
+| Moonlight | Sunshine | base B = 50989+1000N: TCP B-5, B, B+21; UDP B+9, B+10, B+11, B+13, B+21 | above the host's own Sunshine (47989); machines made before this keep their base until they are renamed |
+| LAN game | the game's own server (Quake III: 27960) | the game's port, on the machine's own address | one address per machine, so the same port on every one |
+| bot / gate | the GPU gate | none per machine (the gate's one port, LAN only, per-place token) | |
+
+Router forwards are named `<machine>-<layer>` (`escmicgames-moonlight`), so the router's list reads as this table.
+
+## 2c. Versions: every machine reports what it runs
+
+A machine is one more monitored host, like an agent: what it runs is known, so an open port is justified by a program and that program's
+version can be checked against vulnerability feeds.
+- Each image carries `org.bridgeai.versions` (written at build: the desktop base's build, the stream server, Sunshine, Steam's bootstrap,
+  Resolve, Heroic) next to `org.bridgeai.requires` (../REQUIREMENTS.md).
+- `place.py inventory` (daily, already run by the snapshot timer) adds each machine's image, digest and versions; the GPU host's Zabbix
+  sender pushes them as inventory items of a host per machine, with the hosts' own (gate, door, wake service, Zabbix agent, driver).
+- The vulnerability watch (known-exploited feeds against that inventory) then names the machine, the layer and the port.
+Status: the requirement labels are in the Dockerfiles; versions, inventory and the Zabbix side are to build.
+
 ## 3. Lifecycle checklist
 
 **Create** (in this order; each step is one command or one file):
 1. `place.py create NAME --image TOOL-IMAGE --bind ADDRESS [--gpu] [--games] [--sunshine BASE] [--udp PORT]` (the image is the smallest
-   one with the tool: no Steam in an editing machine, no editor in a games one).
+   one with the tool: no Steam in an editing machine, no editor in a games one; its `org.bridgeai.requires` must fit the host:
+   `host_caps.py check IMAGE`, ../REQUIREMENTS.md; ports per §2b).
 2. `.settings.json`: `purpose`, `ways`, `lang`, `created`, `review`.
 3. Network: the address in `PLACE_IPS`, the bases and ports in their lists, `places-net.sh up`.
 4. The person's stack: an `escritorios` entry (label, aliases, purpose, its own place token) in the master gateways file, then

@@ -14,3 +14,6 @@ RUN test -n "${SUNSHINE_SHA256}" && echo "${SUNSHINE_SHA256}  /tmp/sunshine.deb"
 COPY place-sunshine place-sunshine-res /usr/local/bin/
 COPY place-sunshine.desktop /etc/xdg/autostart/place-sunshine.desktop
 RUN chmod 0755 /usr/local/bin/place-sunshine /usr/local/bin/place-sunshine-res
+
+# What this image needs from its host (../REQUIREMENTS.md; checked by ../host_caps.py). Last line on purpose: it changes no cached layer.
+LABEL org.bridgeai.requires='{"arch": "amd64", "cpu": "x86-64-v2", "gpu": "nvidia", "encoder": "nvenc"}'

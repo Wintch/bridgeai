@@ -7,7 +7,7 @@ The choice is one word in ~/.config/bridgeai/desktop, written by the gate when t
 No file means moderno. Applied live, in the running session (no restart, nothing recreated); with --watch it runs from the session's autostart and
 applies a new choice within seconds. Only these few settings are touched; the person's other settings stay.
 """
-import glob, os, re, subprocess, sys, time
+import colorsys, glob, hashlib, html, json, os, re, socket, subprocess, sys, time
 
 HOME = os.path.expanduser("~")
 CHOICE = os.path.join(HOME, ".config", "bridgeai", "desktop")
@@ -15,7 +15,74 @@ APPLIED = os.path.join(HOME, ".config", "bridgeai", "desktop.applied")
 STYLES = ("moderno", "clasico")
 MODERN = {("xsettings", "/Net/ThemeName"): "Arc-Dark", ("xsettings", "/Net/IconThemeName"): "Papirus-Dark", ("xfwm4", "/general/theme"): "Arc-Dark"}
 CLASSIC_FALLBACK = {("xsettings", "/Net/ThemeName"): "Greybird-dark", ("xsettings", "/Net/IconThemeName"): "elementary-xfce", ("xfwm4", "/general/theme"): "Default"}
-GRADIENT = ((0.07, 0.10, 0.20, 1.0), (0.18, 0.12, 0.30, 1.0))      # top and bottom of the modern background
+GRADIENT = ((0.07, 0.10, 0.20, 1.0), (0.18, 0.12, 0.30, 1.0))      # top and bottom of the modern background (kept for a nameless container)
+# Every machine looks different: its name, big, on a background of its own colour (a hue from the name), so a person with several machines (or the
+# operator) never confuses them. The name is the container's hostname without its "doc" suffix; ~/.config/bridgeai/machine.json (written by the gate,
+# optional) adds the label and purpose the person gave it. The wallpaper is an SVG in ~/.config/bridgeai, rewritten only when it changes.
+MACHINE_INFO = os.path.join(HOME, ".config", "bridgeai", "machine.json")
+WALLPAPER = os.path.join(HOME, ".config", "bridgeai", "wallpaper.svg")
+
+
+def machine_name():
+    n = socket.gethostname()
+    n = n[:-3] if n.endswith("doc") and len(n) > 3 else n
+    return n if re.fullmatch(r"[a-z][a-z0-9-]{1,30}", n) else ""
+
+
+def machine_slot():
+    """The machine's number on its host: its own uid is 3001 + its port slot (place.py), unique per machine; None for an older uid."""
+    u = os.getuid()
+    return u - 3001 if 3001 <= u < 3001 + 500 else None
+
+
+def machine_colors(name, slot=None, color=None):
+    """(top, bottom) RGBA of the machine's background, dark enough for white text. Pure. The hue: `color` ("#rrggbb", from machine.json) when given,
+    else the machine's slot spread by the golden ratio (neighbours get far-apart hues), else one taken from its name."""
+    if isinstance(color, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+        hue = colorsys.rgb_to_hsv(*(int(color[i:i + 2], 16) / 255 for i in (1, 3, 5)))[0]
+    elif isinstance(slot, int) and slot >= 0:
+        hue = (slot * 0.61803398875 + 0.58) % 1.0
+    else:
+        hue = int(hashlib.sha1(name.encode()).hexdigest()[:4], 16) % 360 / 360.0
+    top = colorsys.hsv_to_rgb(hue, 0.55, 0.34)
+    bottom = colorsys.hsv_to_rgb((hue + 0.07) % 1.0, 0.65, 0.16)
+    return (*top, 1.0), (*bottom, 1.0)
+
+
+def machine_info():
+    try:
+        d = json.load(open(MACHINE_INFO))
+        return {k: str(d[k])[:80] for k in ("label", "purpose", "color") if isinstance(d.get(k), str) and d[k].strip()}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def wallpaper_svg(name, top, bottom, info):
+    """The wallpaper: the colour gradient, the machine's name big at the lower left, its label and purpose under it. Pure."""
+    hexc = lambda c: "#%02x%02x%02x" % tuple(round(x * 255) for x in c[:3])
+    sub = " · ".join(html.escape(info[k]) for k in ("label", "purpose") if info.get(k))
+    return ('<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">'
+            f'<defs><linearGradient id="g" x1="0" y1="0" x2="0.35" y2="1"><stop offset="0" stop-color="{hexc(top)}"/>'
+            f'<stop offset="1" stop-color="{hexc(bottom)}"/></linearGradient></defs><rect width="1920" height="1080" fill="url(#g)"/>'
+            f'<text x="96" y="900" font-family="sans-serif" font-weight="700" font-size="150" fill="#ffffff" fill-opacity="0.22">{html.escape(name)}</text>'
+            + (f'<text x="104" y="980" font-family="sans-serif" font-size="54" fill="#ffffff" fill-opacity="0.30">{sub}</text>' if sub else "")
+            + "</svg>\n")
+
+
+def write_wallpaper(name):
+    info = machine_info()
+    top, bottom = machine_colors(name, machine_slot(), info.get("color"))
+    body = wallpaper_svg(name, top, bottom, info)
+    try:
+        if open(WALLPAPER).read() == body:
+            return top, bottom
+    except OSError:
+        pass
+    os.makedirs(os.path.dirname(WALLPAPER), exist_ok=True)
+    with open(WALLPAPER + ".tmp", "w") as f:
+        f.write(body)
+    os.replace(WALLPAPER + ".tmp", WALLPAPER)
+    return top, bottom
 DOCK = ["brave-browser", "chromium", "firefox-esr", "firefox", "thunar", "xfce4-terminal", "steam", "heroic", "quake3-demo", "com.blackmagicdesign.resolve", "DaVinciResolve"]
 
 
@@ -135,9 +202,17 @@ def apply(style):
     values = MODERN if style == "moderno" else classic_values()
     for (chan, prop), v in values.items():
         setp(chan, prop, ("string", v))
-    top, bottom = GRADIENT if style == "moderno" else ((0.0, 0.0, 0.0, 1.0), (0.0, 0.0, 0.0, 1.0))
+    name = machine_name()
+    if name:                                          # both looks: the machine's own colour and name (the classic one without the gradient)
+        top, bottom = write_wallpaper(name)
+        if style != "moderno":
+            bottom = top
+    else:
+        top, bottom = GRADIENT if style == "moderno" else ((0.0, 0.0, 0.0, 1.0), (0.0, 0.0, 0.0, 1.0))
     for b in backdrops():
-        setp("xfce4-desktop", b + "/image-style", ("int", 0))
+        setp("xfce4-desktop", b + "/image-style", ("int", 5 if name else 0))       # 5: zoomed, the wallpaper fills any screen size
+        if name:
+            setp("xfce4-desktop", b + "/last-image", ("string", WALLPAPER))
         setp("xfce4-desktop", b + "/color-style", ("int", 2 if style == "moderno" else 0))
         setp("xfce4-desktop", b + "/rgba1", *[("double", c) for c in top])
         setp("xfce4-desktop", b + "/rgba2", *[("double", c) for c in bottom])
@@ -145,6 +220,18 @@ def apply(style):
     os.makedirs(os.path.dirname(APPLIED), exist_ok=True)
     with open(APPLIED, "w") as f:
         f.write(style + "\n")
+
+
+def machine_info_changed():
+    """True once after machine.json changed (the gate wrote a new label or purpose): the wallpaper is redrawn without a restart."""
+    try:
+        m = os.path.getmtime(MACHINE_INFO)
+    except OSError:
+        return False
+    if getattr(machine_info_changed, "seen", None) != m:
+        machine_info_changed.seen = m
+        return True
+    return False
 
 
 def applied():
@@ -162,7 +249,7 @@ def main(argv):
                 load_widget()
                 main.widget_done = True
             style = choice()
-            if style != applied() or not watch:
+            if style != applied() or not watch or machine_info_changed():
                 apply(style)
         except Exception as e:
             print(f"place-desktop-style: {e}", file=sys.stderr)
